@@ -1,4 +1,5 @@
 use clap::{load_yaml, App, ArgMatches};
+use log::debug;
 
 use d4::{
     find_tracks,
@@ -42,14 +43,16 @@ fn parse_region_spec(
     region_file: Option<&str>,
     chrom_list: &[Chrom],
 ) -> Result<Vec<(String, u32, u32)>, Box<dyn std::error::Error>> {
-    Ok(if let Some(path) = region_file {
+    let regions = if let Some(path) = region_file {
         parse_bed_file(path)?.collect()
     } else {
         chrom_list
             .iter()
             .map(|chrom| (chrom.name.clone(), 0u32, chrom.size as u32))
             .collect()
-    })
+    };
+    debug!("Parsed {} region(s)", regions.len());
+    Ok(regions)
 }
 
 fn open_file_parse_region_and_then<T, F>(
@@ -61,6 +64,7 @@ where
     F: FnOnce(Vec<D4TrackReader>, Vec<(String, u32, u32)>) -> Result<T, Box<dyn std::error::Error>>,
 {
     let input_filename = matches.value_of("input").unwrap();
+    debug!("Input file: {}", input_filename);
     let mut data_path = vec![];
 
     let d4files: Vec<D4TrackReader> = if matches.is_present("first") || input_filename.contains(':')
@@ -98,8 +102,10 @@ where
         })?
     };
 
+    debug!("Found {} track(s)", d4files.len());
     let region_spec =
         parse_region_spec(matches.value_of("region"), d4files[0].header().chrom_list())?;
+    debug!("Region spec: {:?}", region_spec);
 
     *tags = data_path;
 
@@ -123,8 +129,10 @@ where
     T::Output: Clone,
 {
     open_file_parse_region_and_then(matches, file_tags, |inputs, region_spec| {
+        debug!("Running task on {} region(s)", region_spec.len());
         let mut ret = vec![];
-        for mut input in inputs {
+        for (track_idx, mut input) in inputs.into_iter().enumerate() {
+            debug!("Processing track {}", track_idx);
             if input.header().is_integral() {
                 denominators.push(None);
             } else {
@@ -132,6 +140,13 @@ where
             }
             let result = T::create_task(&mut input, &region_spec)?.run();
             for (idx, result) in result.into_iter().enumerate() {
+                debug!(
+                    "Task output for region {}:{}-{} -> {:?}",
+                    result.chrom,
+                    result.begin,
+                    result.end,
+                    result.output
+                );
                 if ret.len() <= idx {
                     ret.push(OwnedOutput {
                         output: vec![result.output.clone()],
@@ -153,6 +168,7 @@ fn percentile_stat(
     percentile: f64,
     mut print_header: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    debug!("Running percentile_stat with percentile {}", percentile);
     let mut tags = Vec::new();
     if print_header {
         print!("#Chr\tBegin\tEnd");
@@ -166,6 +182,7 @@ fn percentile_stat(
         output: results,
     } in histograms
     {
+        debug!("Processing percentile results for {}:{}-{}", chr, begin, end);
         if print_header {
             for tag in tags.iter() {
                 print!("\t{}", tag);
@@ -175,6 +192,13 @@ fn percentile_stat(
         }
         print!("{}\t{}\t{}", chr, begin, end);
         for ((below, hist, above), &denominator) in results.into_iter().zip(denominators.iter()) {
+            debug!(
+                "Histogram stats - below: {}, bins: {}, above: {}, denom: {:?}",
+                below,
+                hist.len(),
+                above,
+                denominator
+            );
             let count: u32 = below + hist.iter().sum::<u32>() + above;
             let below_count = (count as f64 * percentile.min(1.0).max(0.0)).round() as u32;
             let mut current = below;
@@ -192,6 +216,7 @@ fn percentile_stat(
 
 fn hist_stat(matches: ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
     let max_bin = matches.value_of("max-bin").unwrap_or("1000").parse()?;
+    debug!("Running hist_stat with max_bin {}", max_bin);
     let mut unused = Vec::new();
     let (histograms, denominators) =
         open_file_parse_region_and_then(matches, &mut unused, |mut input, regions| {
@@ -212,12 +237,15 @@ fn hist_stat(matches: ArgMatches) -> Result<(), Box<dyn std::error::Error>> {
         ..
     } in histograms.into_iter()
     {
+        debug!("Merging histogram chunk: below={}, bins={}, above={} ", b, hist.len(), a);
         below += b;
         above += a;
         for (id, val) in hist.iter().enumerate() {
             hist_result[id + 1] += val;
         }
     }
+
+    debug!("Histogram final: below={}, above={}", below, above);
 
     println!("<0\t{}", below);
     for (val, cnt) in hist_result[1..].iter().enumerate() {
@@ -248,6 +276,7 @@ fn mean_stat_index<R: Read + Seek>(
     }
     let file_root = d4_framefile::Directory::open_root(reader, 8)?;
 
+    debug!("mean_stat_index: using {} track(s)", tracks.len());
     let root_dir: Vec<_> = tracks
         .iter()
         .map(|name| match file_root.open(name).unwrap() {
@@ -273,6 +302,7 @@ fn mean_stat_index<R: Read + Seek>(
         .collect();
 
     let regions = parse_region_spec(region_file, ssio_reader[0].chrom_list())?;
+    debug!("mean_stat_index: {} region(s)", regions.len());
 
     if print_header {
         print!("#Chr\tBegin\tEnd");
@@ -287,6 +317,7 @@ fn mean_stat_index<R: Read + Seek>(
     }
 
     for (chr, begin, end) in regions {
+        debug!("mean_stat_index: processing {}:{}-{}", chr, begin, end);
         print!("{}\t{}\t{}", chr, begin, end);
         for (sum_index, ssio_reader) in index.iter().zip(ssio_reader.iter_mut()) {
             let index_res = sum_index.query(chr.as_str(), begin, end).unwrap();
@@ -296,6 +327,7 @@ fn mean_stat_index<R: Read + Seek>(
             } else {
                 sum_res.mean(index_res.query_size())
             };
+            debug!(" value = {}", value);
             print!("\t{}", value / ssio_reader.get_denominator().unwrap_or(1.0));
         }
         println!();
@@ -305,6 +337,7 @@ fn mean_stat_index<R: Read + Seek>(
 }
 
 pub fn entry_point(args: Vec<String>) -> Result<(), Box<dyn std::error::Error>> {
+    debug!("stat entry_point args: {:?}", args);
     let yaml = load_yaml!("cli.yml");
     let matches = App::from_yaml(yaml)
         .version(d4tools::VERSION)
