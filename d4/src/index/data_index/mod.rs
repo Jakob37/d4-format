@@ -110,16 +110,20 @@ impl<T: DataSummary> DataIndexRef<T> {
         begin = begin.min(chrom_size as u32);
         end = end.min(chrom_size as u32);
         let grand = self.header.granularity;
-        let actual_begin = if begin % grand == 0 {
+        let mut actual_begin = if begin % grand == 0 {
             begin
         } else {
             begin + grand - begin % grand
         };
-        let actual_end: u32 = if end % grand == 0 {
+        let mut actual_end: u32 = if end % grand == 0 {
             end
         } else {
             end - end % grand
         };
+        if actual_begin >= actual_end {
+            actual_begin = begin;
+            actual_end = begin;
+        }
         let actual_begin_idx = (actual_begin / grand) as usize + base_offset;
         let actual_end_idx = (actual_end / grand) as usize + base_offset;
         let mut ret = T::identity();

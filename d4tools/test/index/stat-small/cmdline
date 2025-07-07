@@ -1,0 +1,4 @@
+${D4TOOLS} create -g ${DATADIR}/index-test.genomesize ${DATADIR}/index-test.bedgraph ${OUTDIR}/index-test.d4 && \
+${D4TOOLS} index build -S ${OUTDIR}/index-test.d4 && \
+echo -e "1\t10\t20" > ${OUTDIR}/region.bed && \
+${D4TOOLS} stat --region ${OUTDIR}/region.bed ${OUTDIR}/index-test.d4

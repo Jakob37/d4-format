@@ -70,8 +70,7 @@ where
             }
 
             if this_end != last_end {
-                let this_begin = top.get_range().0;
-                func(this_begin, this_end, &mut active_heap);
+                func(last_end, this_end, &mut active_heap);
                 last_end = this_end;
             }
 
@@ -82,11 +81,10 @@ where
         }
         if let Some(handle) = handle {
             handle.init();
-            if let Some(top) = active_heap.first() {
-                let this_begin = top.get_range().0;
-                func(this_begin, pos, &mut active_heap);
-                last_end = pos;
+            if !active_heap.is_empty() {
+                func(last_end, pos, &mut active_heap);
             }
+            last_end = pos;
             let idx = active_heap.len();
             active_heap.push(handle);
             adjust_up(&mut active_heap, idx, cmp);
